@@ -1,0 +1,191 @@
+---
+title: "HW4 Analysis"
+author: "Prepared in R"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(readxl)
+library(broom)
+library(janitor)
+```
+
+# Problem 1
+
+Given blood sugar readings: `r paste(c(125,123,117,123,115,112,128,118,114,111,116,109,125,120,113,123,112,118,121,122,115,105,118,131,118), collapse = ", ")}`.
+
+```{r problem1-data}
+blood_sugar <- c(125,123,117,123,115,112,128,118,114,111,116,109,125,120,113,123,112,118,121,122,115,105,118,131,118)
+median_sample <- median(blood_sugar)
+```
+
+The sample median is `r median_sample`.
+
+## a) Sign test for median 120
+
+```{r problem1-sign-test}
+# count signs relative to hypothesized median
+signs <- sign(blood_sugar - 120)
+# remove zeros (exactly 120)
+signs <- signs[signs != 0]
+positives <- sum(signs > 0)
+negatives <- sum(signs < 0)
+# two-sided binomial test
+sign_test <- binom.test(positives, positives + negatives, p = 0.5, alternative = "two.sided")
+sign_test
+```
+
+## b) Wilcoxon signed-rank test for median 120
+
+```{r problem1-wilcoxon}
+wilcox_result <- wilcox.test(blood_sugar, mu = 120, alternative = "two.sided", exact = FALSE)
+wilcox_result
+```
+
+# Problem 2
+
+```{r problem2-data}
+# Read and clean the brain data
+brain_raw <- read_excel("Brain+data.xlsx") %>%
+  clean_names()
+
+# ensure numeric brain mass (strip any non-numeric characters)
+brain_clean <- brain_raw %>%
+  mutate(brain_mass_g = as.numeric(gsub("[^0-9\\.]+", "", brain_mass_g)),
+         ln_brain_mass = as.numeric(ln_brain_mass),
+         glia_neuron_ratio = as.numeric(glia_neuron_ratio)) %>%
+  filter(!is.na(species), !is.na(brain_mass_g), !is.na(glia_neuron_ratio))
+
+nonhuman <- brain_clean %>% filter(species != "Homo sapiens")
+```
+
+## a) Non-human regression
+
+```{r problem2-plot, fig.width=7, fig.height=5}
+library(ggplot2)
+
+p2_model <- lm(glia_neuron_ratio ~ ln_brain_mass, data = nonhuman)
+
+nonhuman %>%
+  ggplot(aes(x = ln_brain_mass, y = glia_neuron_ratio, label = species)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(x = "Ln Brain Mass", y = "Glia-Neuron Ratio",
+       title = "Non-human primate glia-neuron ratio vs. ln brain mass")
+```
+
+The fitted regression equation is `r coef(p2_model)[1] %>% round(3)` + `r coef(p2_model)[2] %>% round(3)`\(\times\)ln(brain mass).
+
+## b) Predicted ratio for humans
+
+```{r problem2-prediction}
+human_ln <- brain_clean %>% filter(species == "Homo sapiens") %>% pull(ln_brain_mass) %>% unique()
+predicted_human <- predict(p2_model, newdata = tibble(ln_brain_mass = human_ln))
+predicted_human
+```
+
+## c) 95% prediction interval for humans
+
+```{r problem2-pi}
+pred_interval <- predict(p2_model, newdata = tibble(ln_brain_mass = human_ln), interval = "prediction", level = 0.95)
+pred_interval
+```
+
+Interpretation: compare the observed human glia-neuron ratio `r brain_clean %>% filter(species == "Homo sapiens") %>% pull(glia_neuron_ratio) %>% unique()` with the interval above to assess whether the human value is unusually high for its brain size.
+
+## d) Non-human vs human applicability
+
+Because humans were excluded from model fitting, the human prediction relies on extrapolation only if the human ln brain mass is outside the non-human range. Check the range below.
+
+```{r problem2-range}
+range_nonhuman <- range(nonhuman$ln_brain_mass)
+human_ln
+range_nonhuman
+```
+
+# Problem 3
+
+```{r problem3-data}
+# Read and clean heart disease data
+heart <- read_csv("HeartDisease.csv") %>%
+  clean_names() %>%
+  mutate(
+    gender = factor(gender, levels = c(0,1), labels = c("Female","Male")),
+    complications = factor(complications, levels = c(0,1), labels = c("No","Yes")),
+    comp_bin = if_else(complications == "Yes", 1, 0)
+  ) %>%
+  # Remove obvious anomalies such as negative costs or durations
+  filter(totalcost >= 0, duration >= 0)
+```
+
+## a) Descriptive statistics
+
+```{r problem3-descriptive}
+# Continuous summaries
+heart %>%
+  select(totalcost, age, interventions, drugs, ervisits, comorbidities, duration) %>%
+  summarise(across(everything(), list(mean = mean, sd = sd, median = median, IQR = IQR)))
+
+# Categorical summaries
+heart %>%
+  select(gender, complications) %>%
+  map(~table(.x))
+```
+
+## b) Distribution of total cost
+
+```{r problem3-hist, fig.width=7, fig.height=5}
+heart %>%
+  ggplot(aes(x = totalcost)) +
+  geom_histogram(bins = 15, color = "white", fill = "steelblue") +
+  geom_vline(aes(xintercept = mean(totalcost)), color = "red", linetype = "dashed") +
+  labs(x = "Total Cost (USD)", y = "Count", title = "Distribution of total cost")
+```
+
+## c) Bivariate comparisons
+
+```{r problem3-bivariate}
+heart %>%
+  group_by(complications) %>%
+  summarise(
+    mean_cost = mean(totalcost),
+    sd_cost = sd(totalcost),
+    n = n()
+  )
+
+# Boxplot
+heart %>%
+  ggplot(aes(x = complications, y = totalcost, fill = complications)) +
+  geom_boxplot(alpha = 0.6) +
+  labs(x = "Complications", y = "Total Cost")
+```
+
+## d) SLR with binary complications
+
+```{r problem3-slr}
+slr_model <- lm(totalcost ~ comp_bin, data = heart)
+summary(slr_model)
+```
+
+Interpretation: `comp_bin` coefficient represents the mean difference in cost between patients with complications and without (reference: No). Because complications are binary, the slope equals the difference in group means.
+
+## e) Interaction with ER visits
+
+```{r problem3-interaction}
+int_model <- lm(totalcost ~ comp_bin * ervisits, data = heart)
+summary(int_model)
+```
+
+The interaction term tests whether the relationship between complications and total cost changes with the number of ER visits.
+
+## f) Multiple linear regression
+
+```{r problem3-mlr}
+mlr_model <- lm(totalcost ~ comp_bin + ervisits + age + gender + duration + interventions + drugs + comorbidities, data = heart)
+summary(mlr_model)
+```
+
+Compare the `comp_bin` slope across the SLR and MLR output to see how adjustment alters the estimated effect of complications.
